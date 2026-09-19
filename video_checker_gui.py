@@ -44,6 +44,7 @@ class VideoCheckerApp(tk.Tk):
         self.scanning = False
         self.cancel_flag = False
         self.msg_queue = queue.Queue()
+        self._scan_threads = 8
 
         self._setup_style()
         self._build_ui()
@@ -133,8 +134,13 @@ class VideoCheckerApp(tk.Tk):
         # 操作行
         frm_btn = ttk.Frame(self)
         frm_btn.pack(fill="x", **pad)
+        ttk.Label(frm_btn, text="扫描线程", style="Muted.TLabel").pack(side="left")
+        self.threads_var = tk.StringVar(value="8")
+        self.spin_threads = ttk.Spinbox(frm_btn, from_=1, to=32, width=4,
+                                        textvariable=self.threads_var)
+        self.spin_threads.pack(side="left", padx=(6, 0))
         self.btn_scan = ttk.Button(frm_btn, text="开始扫描", command=self.start_scan)
-        self.btn_scan.pack(side="left")
+        self.btn_scan.pack(side="left", padx=(10, 0))
         self.btn_cancel = ttk.Button(frm_btn, text="取消", style="Ghost.TButton",
                                      command=self.cancel_scan, state="disabled")
         self.btn_cancel.pack(side="left", padx=(8, 0))
@@ -274,11 +280,18 @@ class VideoCheckerApp(tk.Tk):
         self.progress.configure(mode="indeterminate", value=0)
         self.progress.start(60)
         exts_list = ["." + e for e in exts]
-        threading.Thread(target=self._scan_worker, args=(target, exts_list),
+        # 线程数: 1~32, 非法输入回退默认 8
+        try:
+            nthreads = int(self.threads_var.get())
+        except ValueError:
+            nthreads = 8
+        nthreads = max(1, min(nthreads, 32))
+        self._scan_threads = nthreads
+        threading.Thread(target=self._scan_worker, args=(target, exts_list, nthreads),
                          daemon=True).start()
 
-    def _scan_worker(self, root, exts):
-        scanned = matched = 0
+    def _scan_worker(self, root, exts, nthreads=8):
+        """两阶段: 统计总数 → 生产者遍历文件队列, N 个线程并行检测。"""
         try:
             # 阶段 1: 只遍历文件名快速统计总数(比检测快得多), 用于计算进度百分比
             self.msg_queue.put(("phase", "count"))
@@ -295,7 +308,22 @@ class VideoCheckerApp(tk.Tk):
             if self.cancel_flag:
                 self.msg_queue.put(("done", None))
                 return
-            # 阶段 2: 逐文件检测
+            # 阶段 2: 生产者遍历目录, 视频文件入队; N 个工作线程并行检测
+            self.msg_queue.put(("phase", "detect"))
+            jobs = queue.Queue()
+            counters = {"scanned": 0, "matched": 0}
+            clock = threading.Lock()
+
+            def bump(key, n=1):
+                with clock:
+                    counters[key] += n
+
+            workers = []
+            for _ in range(max(1, nthreads)):
+                t = threading.Thread(target=self._detect_worker,
+                                     args=(jobs, counters, clock), daemon=True)
+                t.start()
+                workers.append(t)
             for dirpath, dirnames, filenames in os.walk(root, topdown=True,
                                                         onerror=lambda e: None):
                 if self.cancel_flag:
@@ -304,39 +332,71 @@ class VideoCheckerApp(tk.Tk):
                 for name in filenames:
                     if self.cancel_flag:
                         break
-                    scanned += 1
                     if os.path.splitext(name)[1].lower() not in exts:
+                        bump("scanned")     # 非视频零成本, 直接计入已处理
                         continue
                     full = os.path.join(dirpath, name)
                     try:
                         st = os.stat(full)
                     except OSError:
+                        bump("scanned")
                         continue
-                    status, reason = detect_file(full)
-                    matched += 1
-                    dur_s = get_duration(full)
-                    rec = {
-                        "path": full, "name": name, "dir": dirpath,
-                        "size": st.st_size, "sizeText": human_size(st.st_size),
-                        "dur": self._fmt_dur(dur_s),
-                        "mtime": time.strftime("%Y-%m-%d %H:%M",
-                                               time.localtime(st.st_mtime)),
-                        "status": status, "reason": reason, "checked": False,
-                    }
-                    cur_ext = os.path.splitext(name)[1].lower().lstrip(".")
-                    real_ext = sniff_container_ext(full)
-                    if real_ext and real_ext != cur_ext:
-                        rec["fixExt"] = real_ext
-                    self.msg_queue.put(("result", rec))
-                    if matched % 5 == 0:
-                        self.msg_queue.put(("progress", scanned, matched, dirpath))
-                if scanned % 2000 < len(filenames) or scanned == total:
-                    self.msg_queue.put(("progress", scanned, matched, dirpath))
+                    jobs.put((full, name, dirpath, st))
+            for _ in workers:
+                jobs.put(None)              # 哨兵: 通知各线程退出
+            for t in workers:
+                t.join()
+            with clock:
+                scanned, matched = counters["scanned"], counters["matched"]
             self.msg_queue.put(("progress", scanned, matched, ""))
         except Exception as e:
             self.msg_queue.put(("done", f"扫描出错: {e}"))
             return
         self.msg_queue.put(("done", None))
+
+    def _detect_worker(self, jobs, counters, clock):
+        """检测线程: 从队列取视频文件, 检测 + 时长 + 嗅探, 结果推给主线程渲染。"""
+        local_n = 0
+
+        def snapshot():
+            with clock:
+                return counters["scanned"], counters["matched"]
+
+        while True:
+            job = jobs.get()
+            if job is None or self.cancel_flag:
+                break
+            full, name, dirpath, st = job
+            try:
+                status, reason = detect_file(full)
+                with clock:
+                    counters["matched"] += 1
+                dur_s = get_duration(full)
+                rec = {
+                    "path": full, "name": name, "dir": dirpath,
+                    "size": st.st_size, "sizeText": human_size(st.st_size),
+                    "dur": self._fmt_dur(dur_s),
+                    "mtime": time.strftime("%Y-%m-%d %H:%M",
+                                           time.localtime(st.st_mtime)),
+                    "status": status, "reason": reason, "checked": False,
+                }
+                cur_ext = os.path.splitext(name)[1].lower().lstrip(".")
+                real_ext = sniff_container_ext(full)
+                if real_ext and real_ext != cur_ext:
+                    rec["fixExt"] = real_ext
+                self.msg_queue.put(("result", rec))
+            except Exception:
+                pass                    # 单文件异常不拖垮整个线程
+            finally:
+                with clock:
+                    counters["scanned"] += 1
+            local_n += 1
+            if local_n % 10 == 0:       # 节流: 每线程每 10 个文件报一次进度
+                s, m = snapshot()
+                self.msg_queue.put(("progress", s, m, dirpath))
+        if local_n % 10:
+            s, m = snapshot()
+            self.msg_queue.put(("progress", s, m, dirpath))
 
     def cancel_scan(self):
         self.cancel_flag = True
@@ -371,17 +431,18 @@ class VideoCheckerApp(tk.Tk):
                     speed = scanned / elapsed
                     mm, ss = divmod(int(elapsed), 60)
                     cur_text = f"    当前: {cur[:70]}" if cur else ""
+                    th = f"    {self._scan_threads} 线程"
                     if self._scan_total > 0:
                         pct = min(scanned / self._scan_total * 100, 100.0)
                         self.progress.configure(value=scanned)
                         self.lbl_progress.config(
                             text=f"进度 {scanned:,}/{self._scan_total:,}（{pct:.1f}%）"
                                  f"    已用 {mm:02d}:{ss:02d}    速度 {speed:,.0f} 文件/秒"
-                                 f"    发现 {matched} 个视频{cur_text}")
+                                 f"    发现 {matched} 个视频{th}{cur_text}")
                     else:
                         self.lbl_progress.config(
                             text=f"已检查 {scanned:,} 个文件    已用 {mm:02d}:{ss:02d}"
-                                 f"    速度 {speed:,.0f} 文件/秒    发现 {matched} 个视频{cur_text}")
+                                 f"    速度 {speed:,.0f} 文件/秒    发现 {matched} 个视频{th}{cur_text}")
                 elif kind == "done":
                     self._scan_finished(msg[1])
                 elif kind == "del_row":
