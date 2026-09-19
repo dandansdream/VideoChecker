@@ -60,3 +60,13 @@ Full-disk scans automatically skip system directories such as Windows, Program F
 - Run `pip install pyinstaller`, then run `build.bat`
 
 Verification: `python test_detection.py` should report 23/23 passed (plus 10/10 sniffing tests).
+
+## Changelog
+
+### v1.1 (2026-09-19)
+- **Multi-threaded scanning**: new "Scan Threads" setting (1–32, default 8); detection, duration parsing and sniffing now run in parallel — a noticeable boost on HDDs and large files
+- Added end-to-end test for multi-threaded scanning (`test_scan_multithread.py`)
+- Detection verdicts are identical to v1.0; result order may differ from directory order due to parallel execution
+
+### v1.0 (2026-09-19)
+- First stable release: disk/folder deep scanning, content sniffing for mislabeled extensions, three-level verdicts, duration display, Recycle Bin deletion (read-only & long-path support), scan progress display
