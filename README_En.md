@@ -13,11 +13,13 @@ Double-click `VideoChecker.exe` — no installation required.
 
 1. Choose a scan location (disk dropdown / pick a folder / type a path)
 2. Check the video formats you want to scan
-3. Click "Start Scan" and wait for it to finish
-4. Filter and select rows in the results table, then click "Delete Selected (to Recycle Bin)"
+3. Adjust "Scan Threads" as needed (1–32, default 8; use 4–8 for HDDs, higher for SSDs)
+4. Click "Start Scan" and wait for it to finish
+5. Filter and select rows in the results table, then click "Delete Selected (to Recycle Bin)"
 
 Tips:
 - First launch takes 3–5 seconds (single-file EXE self-extraction)
+- Scanning uses multi-threaded parallel detection; the thread count can be changed any time in the UI
 - Deletion only moves files to the Recycle Bin — nothing is destroyed directly
 - Double-click a result row to open the file's location
 
@@ -44,8 +46,9 @@ Full-disk scans automatically skip system directories such as Windows, Program F
 ## Source Code
 
 - `detector.py` — detection core: container structure validation for each format, drive enumeration, Recycle Bin deletion
-- `video_checker_gui.py` — native desktop UI (Tkinter, dark theme)
+- `video_checker_gui.py` — native desktop UI (Tkinter, dark theme, multi-threaded scan scheduling)
 - `test_detection.py` — unit tests for detection logic (synthetic positive/negative samples, 23 cases + 10 container-sniffing cases)
+- `test_scan_multithread.py` — end-to-end verification of multi-threaded scanning (result correctness / clean shutdown / parameter clamping)
 - `test_e2e.py` — end-to-end test of the legacy web architecture (reference only)
 - `build.bat` — one-click build script
 
