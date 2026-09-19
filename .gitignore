@@ -1,0 +1,15 @@
+# 构建产物
+build/
+dist/
+dist_gui/
+dist_new/
+*.exe
+__pycache__/
+*.pyc
+release/
+VideoChecker-发布包/
+
+# 遗留的 web 版原型与调试脚本（当前程序为 Tkinter 桌面版）
+server.py
+index.html
+debug_mkv.py
