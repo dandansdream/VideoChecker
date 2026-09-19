@@ -2,6 +2,8 @@
 
 PS：这个主要是仓鼠患者使用0.0
 
+> 英文版文档见 [README_En.md](README_En.md)。
+
 检测磁盘/文件夹中的视频文件是否完整（识别下载中断、录制未结束等造成的截断与损坏），
 列出结果供手动勾选删除（走系统回收站，可随时还原）。
 
@@ -41,14 +43,15 @@ PS：这个主要是仓鼠患者使用0.0
 
 - `detector.py` —— 检测核心：各格式容器结构校验、磁盘枚举、回收站删除
 - `video_checker_gui.py` —— 原生桌面界面（Tkinter 深色主题）
-- `test_detection.py` —— 检测逻辑单元测试（构造正/反样本，11 个用例）
+- `test_detection.py` —— 检测逻辑单元测试（构造正/反样本，23 个用例 + 10 个容器嗅探用例）
 - `test_e2e.py` —— 旧版 Web 架构的端到端测试（仅供参考）
-- `server.py` + `index.html` —— 旧版 Web 架构源码（已弃用，仅存档）
 - `build.bat` —— 一键打包脚本
+
+（旧版 Web 架构源码 `server.py` + `index.html` 仅保留在本地，未纳入本仓库。）
 
 ## 环境要求（重新打包时）
 
 - Windows 10/11，Python 3.10+（仅标准库，无第三方依赖）
 - `pip install pyinstaller` 后运行 `build.bat`
 
-验证：`python test_detection.py` 应显示 11/11 通过。
+验证：`python test_detection.py` 应显示 23/23 通过（另嗅探 10/10）。
